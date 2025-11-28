@@ -1,5 +1,6 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ChatProvider, useChat } from "../chat-context";
 import { useFileSystem } from "../file-system-context";
 import { useChat as useAIChat } from "@ai-sdk/react";
@@ -16,6 +17,13 @@ vi.mock("@ai-sdk/react", () => ({
 
 vi.mock("@/lib/anon-work-tracker", () => ({
   setHasAnonWork: vi.fn(),
+}));
+
+vi.mock("ai", () => ({
+  UIMessage: class {},
+  DefaultChatTransport: vi.fn().mockImplementation((config) => ({
+    ...config,
+  })),
 }));
 
 // Helper component to access chat context
@@ -44,12 +52,12 @@ describe("ChatContext", () => {
 
   const mockHandleToolCall = vi.fn();
 
+  const mockSendMessage = vi.fn();
+
   const mockUseAIChat = {
     messages: [],
-    input: "",
-    handleInputChange: vi.fn(),
-    handleSubmit: vi.fn(),
-    status: "idle",
+    sendMessage: mockSendMessage,
+    status: "ready",
   };
 
   beforeEach(() => {
@@ -75,14 +83,14 @@ describe("ChatContext", () => {
     );
 
     expect(screen.getByTestId("messages").textContent).toBe("0");
-    expect(screen.getByTestId("input").getAttribute("value")).toBe(null);
-    expect(screen.getByTestId("status").textContent).toBe("idle");
+    expect((screen.getByTestId("input") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByTestId("status").textContent).toBe("ready");
   });
 
   test("initializes with project ID and messages", () => {
     const initialMessages = [
-      { id: "1", role: "user" as const, content: "Hello" },
-      { id: "2", role: "assistant" as const, content: "Hi there!" },
+      { id: "1", role: "user" as const, parts: [{ type: "text", text: "Hello" }] },
+      { id: "2", role: "assistant" as const, parts: [{ type: "text", text: "Hi there!" }] },
     ];
 
     (useAIChat as any).mockReturnValue({
@@ -96,21 +104,19 @@ describe("ChatContext", () => {
       </ChatProvider>
     );
 
-    expect(useAIChat).toHaveBeenCalledWith({
-      api: "/api/chat",
-      initialMessages,
-      body: {
-        files: mockFileSystem.serialize(),
-        projectId: "test-project",
-      },
-      onToolCall: expect.any(Function),
-    });
+    expect(useAIChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: expect.any(Object),
+        messages: initialMessages,
+        onToolCall: expect.any(Function),
+      })
+    );
 
     expect(screen.getByTestId("messages").textContent).toBe("2");
   });
 
   test("tracks anonymous work when no project ID", async () => {
-    const mockMessages = [{ id: "1", role: "user", content: "Hello" }];
+    const mockMessages = [{ id: "1", role: "user", parts: [{ type: "text", text: "Hello" }] }];
 
     (useAIChat as any).mockReturnValue({
       ...mockUseAIChat,
@@ -132,7 +138,7 @@ describe("ChatContext", () => {
   });
 
   test("does not track anonymous work when project ID exists", async () => {
-    const mockMessages = [{ id: "1", role: "user", content: "Hello" }];
+    const mockMessages = [{ id: "1", role: "user", parts: [{ type: "text", text: "Hello" }] }];
 
     (useAIChat as any).mockReturnValue({
       ...mockUseAIChat,
@@ -151,14 +157,9 @@ describe("ChatContext", () => {
   });
 
   test("passes through AI chat functionality", () => {
-    const mockHandleInputChange = vi.fn();
-    const mockHandleSubmit = vi.fn();
-
     (useAIChat as any).mockReturnValue({
       ...mockUseAIChat,
-      handleInputChange: mockHandleInputChange,
-      handleSubmit: mockHandleSubmit,
-      status: "loading",
+      status: "streaming",
     });
 
     render(
@@ -167,9 +168,9 @@ describe("ChatContext", () => {
       </ChatProvider>
     );
 
-    expect(screen.getByTestId("status").textContent).toBe("loading");
+    expect(screen.getByTestId("status").textContent).toBe("streaming");
 
-    // Verify functions are passed through
+    // Verify elements exist
     const textarea = screen.getByTestId("input");
     const form = screen.getByTestId("form");
 
@@ -191,9 +192,43 @@ describe("ChatContext", () => {
       </ChatProvider>
     );
 
-    const toolCall = { toolName: "test", args: {} };
+    const toolCall = { toolName: "test", input: {} };
     onToolCallHandler({ toolCall });
 
     expect(mockHandleToolCall).toHaveBeenCalledWith(toolCall);
+  });
+
+  test("handles input change", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    const input = screen.getByTestId("input") as HTMLTextAreaElement;
+    await user.type(input, "Hello");
+
+    expect(input.value).toBe("Hello");
+  });
+
+  test("handles form submit", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    const input = screen.getByTestId("input") as HTMLTextAreaElement;
+    await user.type(input, "Hello");
+
+    const form = screen.getByTestId("form");
+    await user.click(form.querySelector("button")!);
+
+    expect(mockSendMessage).toHaveBeenCalledWith({ text: "Hello" });
+    expect(input.value).toBe("");
   });
 });

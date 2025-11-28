@@ -1,17 +1,18 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import {
-  LanguageModelV1,
-  LanguageModelV1StreamPart,
-  LanguageModelV1Message,
+import type {
+  LanguageModelV2,
+  LanguageModelV2StreamPart,
+  LanguageModelV2Prompt,
+  LanguageModelV2CallOptions,
 } from "@ai-sdk/provider";
 
 const MODEL = "claude-haiku-4-5";
 
-export class MockLanguageModel implements LanguageModelV1 {
-  readonly specificationVersion = "v1" as const;
+export class MockLanguageModelV2 implements LanguageModelV2 {
+  readonly specificationVersion = "v2" as const;
   readonly provider = "mock";
   readonly modelId: string;
-  readonly defaultObjectGenerationMode = "tool" as const;
+  readonly supportedUrls: Record<string, RegExp[]> = {};
 
   constructor(modelId: string) {
     this.modelId = modelId;
@@ -21,43 +22,30 @@ export class MockLanguageModel implements LanguageModelV1 {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  private extractUserPrompt(messages: LanguageModelV1Message[]): string {
-    // Find the last user message
+  private extractUserPrompt(messages: LanguageModelV2Prompt): string {
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
       if (message.role === "user") {
         const content = message.content;
         if (Array.isArray(content)) {
-          // Extract text from content parts
           const textParts = content
             .filter((part: any) => part.type === "text")
             .map((part: any) => part.text);
           return textParts.join(" ");
-        } else if (typeof content === "string") {
-          return content;
         }
       }
     }
     return "";
   }
 
-  private getLastToolResult(messages: LanguageModelV1Message[]): any {
-    // Find the last tool message
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "tool") {
-        const content = messages[i].content;
-        if (Array.isArray(content) && content.length > 0) {
-          return content[0];
-        }
-      }
-    }
-    return null;
+  private countToolMessages(messages: LanguageModelV2Prompt): number {
+    return messages.filter((m) => m.role === "tool").length;
   }
 
   private async *generateMockStream(
-    messages: LanguageModelV1Message[],
+    messages: LanguageModelV2Prompt,
     userPrompt: string
-  ): AsyncGenerator<LanguageModelV1StreamPart> {
+  ): AsyncGenerator<LanguageModelV2StreamPart> {
     // Count tool messages to determine which step we're on
     const toolMessageCount = messages.filter((m) => m.role === "tool").length;
 
@@ -74,20 +62,21 @@ export class MockLanguageModel implements LanguageModelV1 {
       componentName = "Card";
     }
 
+    const textId = "text_" + Math.random().toString(36).substring(7);
+
     // Step 1: Create component file
     if (toolMessageCount === 1) {
       const text = `I'll create a ${componentName} component for you.`;
       for (const char of text) {
-        yield { type: "text-delta", textDelta: char };
+        yield { type: "text-delta", id: textId, delta: char };
         await this.delay(25);
       }
 
       yield {
         type: "tool-call",
-        toolCallType: "function",
-        toolCallId: `call_1`,
+        toolCallId: "call_1",
         toolName: "str_replace_editor",
-        args: JSON.stringify({
+        input: JSON.stringify({
           command: "create",
           path: `/components/${componentName}.jsx`,
           file_text: this.getComponentCode(componentType),
@@ -97,10 +86,7 @@ export class MockLanguageModel implements LanguageModelV1 {
       yield {
         type: "finish",
         finishReason: "tool-calls",
-        usage: {
-          promptTokens: 50,
-          completionTokens: 30,
-        },
+        usage: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
       };
       return;
     }
@@ -109,16 +95,15 @@ export class MockLanguageModel implements LanguageModelV1 {
     if (toolMessageCount === 2) {
       const text = `Now let me enhance the component with better styling.`;
       for (const char of text) {
-        yield { type: "text-delta", textDelta: char };
+        yield { type: "text-delta", id: textId, delta: char };
         await this.delay(25);
       }
 
       yield {
         type: "tool-call",
-        toolCallType: "function",
-        toolCallId: `call_2`,
+        toolCallId: "call_2",
         toolName: "str_replace_editor",
-        args: JSON.stringify({
+        input: JSON.stringify({
           command: "str_replace",
           path: `/components/${componentName}.jsx`,
           old_str: this.getOldStringForReplace(componentType),
@@ -129,10 +114,7 @@ export class MockLanguageModel implements LanguageModelV1 {
       yield {
         type: "finish",
         finishReason: "tool-calls",
-        usage: {
-          promptTokens: 50,
-          completionTokens: 30,
-        },
+        usage: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
       };
       return;
     }
@@ -141,16 +123,15 @@ export class MockLanguageModel implements LanguageModelV1 {
     if (toolMessageCount === 0) {
       const text = `This is a static response. You can place an Anthropic API key in the .env file to use the Anthropic API for component generation. Let me create an App.jsx file to display the component.`;
       for (const char of text) {
-        yield { type: "text-delta", textDelta: char };
+        yield { type: "text-delta", id: textId, delta: char };
         await this.delay(15);
       }
 
       yield {
         type: "tool-call",
-        toolCallType: "function",
-        toolCallId: `call_3`,
+        toolCallId: "call_3",
         toolName: "str_replace_editor",
-        args: JSON.stringify({
+        input: JSON.stringify({
           command: "create",
           path: "/App.jsx",
           file_text: this.getAppCode(componentName),
@@ -160,10 +141,7 @@ export class MockLanguageModel implements LanguageModelV1 {
       yield {
         type: "finish",
         finishReason: "tool-calls",
-        usage: {
-          promptTokens: 50,
-          completionTokens: 30,
-        },
+        usage: { inputTokens: 50, outputTokens: 30, totalTokens: 80 },
       };
       return;
     }
@@ -178,17 +156,14 @@ export class MockLanguageModel implements LanguageModelV1 {
 The component is now ready to use. You can see the preview on the right side of the screen.`;
 
       for (const char of text) {
-        yield { type: "text-delta", textDelta: char };
+        yield { type: "text-delta", id: textId, delta: char };
         await this.delay(30);
       }
 
       yield {
         type: "finish",
         finishReason: "stop",
-        usage: {
-          promptTokens: 50,
-          completionTokens: 50,
-        },
+        usage: { inputTokens: 50, outputTokens: 50, totalTokens: 100 },
       };
       return;
     }
@@ -423,66 +398,56 @@ export default function App() {
   }
 
   async doGenerate(
-    options: Parameters<LanguageModelV1["doGenerate"]>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV1["doGenerate"]>>> {
+    options: LanguageModelV2CallOptions
+  ): Promise<Awaited<ReturnType<LanguageModelV2["doGenerate"]>>> {
     const userPrompt = this.extractUserPrompt(options.prompt);
 
-    // Collect all stream parts
-    const parts: LanguageModelV1StreamPart[] = [];
-    for await (const part of this.generateMockStream(
-      options.prompt,
-      userPrompt
-    )) {
+    const parts: LanguageModelV2StreamPart[] = [];
+    for await (const part of this.generateMockStream(options.prompt, userPrompt)) {
       parts.push(part);
     }
 
-    // Build response from parts
-    const textParts = parts
+    const textContent = parts
       .filter((p) => p.type === "text-delta")
-      .map((p) => (p as any).textDelta)
+      .map((p) => (p as any).delta)
       .join("");
 
     const toolCalls = parts
       .filter((p) => p.type === "tool-call")
       .map((p) => ({
-        toolCallType: "function" as const,
+        type: "tool-call" as const,
         toolCallId: (p as any).toolCallId,
         toolName: (p as any).toolName,
-        args: (p as any).args,
+        input: (p as any).input,
       }));
 
-    // Get finish reason from finish part
     const finishPart = parts.find((p) => p.type === "finish") as any;
     const finishReason = finishPart?.finishReason || "stop";
 
+    const content: any[] = [];
+    if (textContent) {
+      content.push({ type: "text", text: textContent });
+    }
+    content.push(...toolCalls);
+
     return {
-      text: textParts,
-      toolCalls,
-      finishReason: finishReason as any,
-      usage: {
-        promptTokens: 100,
-        completionTokens: 200,
-      },
+      content,
+      finishReason,
+      usage: { inputTokens: 100, outputTokens: 200, totalTokens: 300 },
       warnings: [],
-      rawCall: {
-        rawPrompt: options.prompt,
-        rawSettings: {
-          maxTokens: options.maxTokens,
-          temperature: options.temperature,
-        },
-      },
     };
   }
 
   async doStream(
-    options: Parameters<LanguageModelV1["doStream"]>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV1["doStream"]>>> {
+    options: LanguageModelV2CallOptions
+  ): Promise<Awaited<ReturnType<LanguageModelV2["doStream"]>>> {
     const userPrompt = this.extractUserPrompt(options.prompt);
     const self = this;
 
-    const stream = new ReadableStream<LanguageModelV1StreamPart>({
+    const stream = new ReadableStream<LanguageModelV2StreamPart>({
       async start(controller) {
         try {
+          controller.enqueue({ type: "stream-start", warnings: [] });
           const generator = self.generateMockStream(options.prompt, userPrompt);
           for await (const chunk of generator) {
             controller.enqueue(chunk);
@@ -494,24 +459,16 @@ export default function App() {
       },
     });
 
-    return {
-      stream,
-      warnings: [],
-      rawCall: {
-        rawPrompt: options.prompt,
-        rawSettings: {},
-      },
-      rawResponse: { headers: {} },
-    };
+    return { stream };
   }
 }
 
-export function getLanguageModel() {
+export function getLanguageModel(): LanguageModelV2 {
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey || apiKey.trim() === "") {
     console.log("No ANTHROPIC_API_KEY found, using mock provider");
-    return new MockLanguageModel("mock-claude-sonnet-4-0");
+    return new MockLanguageModelV2("mock-claude-sonnet-4-0");
   }
 
   return anthropic(MODEL);

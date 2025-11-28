@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "mcp__playwrigth__browser_type",
+      "mcp__playwrigth__browser_wait_for",
+      "mcp__playwrigth__browser_take_screenshot",
+      "mcp__playwrigth__browser_click"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

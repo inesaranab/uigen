@@ -11,7 +11,8 @@ import { VirtualFileSystem, FileNode } from "@/lib/file-system";
 
 interface ToolCall {
   toolName: string;
-  args: any;
+  input?: any;
+  args?: any;
 }
 
 interface FileSystemContextType {
@@ -144,7 +145,8 @@ export function FileSystemProvider({
 
   const handleToolCall = useCallback(
     (toolCall: ToolCall) => {
-      const { toolName, args } = toolCall;
+      const { toolName, input, args: legacyArgs } = toolCall;
+      const args = input || legacyArgs;
 
       // Handle str_replace_editor tool
       if (toolName === "str_replace_editor" && args) {
